@@ -39,6 +39,7 @@ import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as DeliveryAttempts from "./DeliveryAttempts.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
+import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ApnsDeliveryQueue from "./ApnsDeliveryQueue.ts";
 import { withSpanAttributes } from "../observability.ts";
 
@@ -519,6 +520,7 @@ const make = Effect.gen(function* () {
   const mac = yield* Mac.Mac;
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
+  const links = yield* EnvironmentLinks.EnvironmentLinks;
 
   const userHasContentToShow = Effect.fnUntraced(function* (userId: string) {
     const now = yield* DateTime.now;
@@ -604,8 +606,31 @@ const make = Effect.gen(function* () {
     readonly userId: string;
     readonly notification: ApnsNotificationPayload;
   }) {
+    const { environmentId } = input.notification;
     if (input.notification.phase === undefined || input.notification.updatedAt === undefined) {
-      return true;
+      // No activity row to recheck, and a queued alert can outlive its link or permission.
+      return yield* links.getForUser({ userId: input.userId, environmentId }).pipe(
+        Effect.flatMap((link) =>
+          link === null
+            ? Effect.succeed(false)
+            : links
+                .listDeliveryUsersForEnvironment({
+                  environmentId,
+                  environmentPublicKey: link.environmentPublicKey,
+                })
+                .pipe(
+                  Effect.map((users) =>
+                    users.some((user) => user.userId === input.userId && user.notificationsEnabled),
+                  ),
+                ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("environment link recheck failed; allowing queued delivery", {
+            cause,
+            environmentId,
+          }).pipe(Effect.as(true)),
+        ),
+      );
     }
     return yield* stateIdentityIsCurrent({
       userId: input.userId,
@@ -1041,7 +1066,18 @@ const make = Effect.gen(function* () {
     }),
     sendAgentNotificationForTarget: Effect.fnUntraced(function* (input) {
       const token = input.target.push_token;
-      if (!config.apns || !token) return null;
+      if (!token) return null;
+      // Report it, so the agent hears the phone was missed rather than absent.
+      if (!config.apns) {
+        return {
+          deviceId: input.target.device_id,
+          kind: "push_notification",
+          ok: false,
+          apnsStatus: null,
+          apnsReason: "APNs is not configured for this relay.",
+          apnsId: null,
+        };
+      }
       return yield* deliveryQueue.enqueuePushNotification({
         userId: input.target.user_id,
         deviceId: input.target.device_id,

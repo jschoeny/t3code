@@ -8,6 +8,8 @@ For activity without ordinary alerts on Android 8 or newer, leave **Ongoing agen
 
 On iOS you can also add the **Agent Activity** widget to your Home Screen or Lock Screen. It shows the same agents as the Live Activity, using your T3 Connect sign-in. The widget refreshes when you open T3 and shows unfinished work as out of date after 10 minutes.
 
+To hear only about the work you care about, set **Alert me about** to **Custom** in **Settings → Notifications** on your phone and in **Settings → General** on desktop and web. Custom skips the alert for every finished turn and keeps alerts for failures and for input or approval requests. Then ask an agent to notify you, in a message ("notify me when the PR is green") or in instructions such as `AGENTS.md`. The agent sends one notification to your open T3 Code apps and your phone, and tapping it opens the thread.
+
 Ordinary alerts stay quiet while the mobile app is in the foreground. Ongoing activity continues to update. Viewing a thread on another device does not silence your phone's alerts.
 
 Android notifications require Android 7.0 or newer and Google Play services. Android 16 and newer can promote ongoing activity to a Live Update, subject to system settings and device support. Other devices show a regular ongoing notification. If Live Updates don't appear on Android 16 or newer, check **Live Update Settings** in T3 Code's **Settings → Notifications**. Android 7's battery-saving modes can delay removal of expired cards.
