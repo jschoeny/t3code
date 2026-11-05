@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { NotificationSettings } from "./NotificationSettings";
+import { NotificationEventsSettings, NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
@@ -485,6 +485,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.notificationMode !== DEFAULT_UNIFIED_SETTINGS.notificationMode
       ? ["Thread notifications"]
       : []),
+    ...(settings.notificationEvents !== DEFAULT_UNIFIED_SETTINGS.notificationEvents
+      ? ["Alert me about"]
+      : []),
     ...(settings.inAppNotificationsEnabled !== DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled
       ? ["In-app notifications"]
       : []),
@@ -652,6 +655,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
+      notificationEvents: DEFAULT_UNIFIED_SETTINGS.notificationEvents,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
@@ -791,6 +795,7 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="notifications" title={gt("Notifications")}>
         <NotificationSettings />
+        <NotificationEventsSettings />
         <SettingsRow
           {...setting("in-app-notifications")}
           description={

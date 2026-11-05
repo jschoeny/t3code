@@ -15,10 +15,11 @@ import { useNavigation } from "@react-navigation/native";
 import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState, useSyncExternalStore } from "react";
-import { Linking, Platform } from "react-native";
+import { Linking, Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { ListChoiceRow } from "../../components/ui/ListChoiceRow";
 import {
   isAtomCommandInterrupted,
   reportAtomCommandResult,
@@ -37,6 +38,7 @@ import {
   getAgentAwarenessRegistrationStatus,
   refreshAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
+  updateAgentAwarenessRegistrationPreferences,
 } from "../agent-awareness/remoteRegistration";
 import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
@@ -63,6 +65,15 @@ function canLinkEnvironmentToConnect(environmentId: EnvironmentId) {
     managedCapabilityDenial(policy, "connect") === undefined
   );
 }
+
+const NOTIFICATION_EVENT_OPTIONS = [
+  { events: "everything", label: "Everything", description: "Every finished turn" },
+  {
+    events: "custom",
+    label: "Custom",
+    description: "Agent notifications you ask for, input, approvals, failures",
+  },
+] as const;
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -166,6 +177,25 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const canClearLiveActivitiesPreference =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.liveActivitiesEnabled !== false;
+
+  const notificationEvents = AsyncResult.isSuccess(preferencesResult)
+    ? (preferencesResult.value.notificationEvents ?? "everything")
+    : null;
+  const selectNotificationEvents = async (
+    events: (typeof NOTIFICATION_EVENT_OPTIONS)[number]["events"],
+  ) => {
+    if (events === notificationEvents) return;
+    savePreferences({ notificationEvents: events });
+    const result = await settleAsyncResult(() =>
+      runtime.runPromiseExit(
+        updateAgentAwarenessRegistrationPreferences({ notificationEvents: events }),
+      ),
+    );
+    // The saved choice is sent again with the next registration refresh.
+    if (result._tag === "Failure") {
+      reportAtomCommandResult(result, { label: "notification events update" });
+    }
+  };
 
   const connections = Object.values(savedConnectionsById);
   const environmentCount = connections.length;
@@ -484,6 +514,24 @@ function ConfiguredSettingsNotificationsRouteScreen() {
             />
           ) : null}
         </SettingsSection>
+        <View className="gap-2">
+          <SettingsSection title="Alert me about">
+            {NOTIFICATION_EVENT_OPTIONS.map((option, index) => (
+              <ListChoiceRow
+                key={option.events}
+                label={option.label}
+                description={option.description}
+                selected={notificationEvents === option.events}
+                separated={index > 0}
+                disabled={notificationEvents === null || !agentAwarenessPushAvailable}
+                onPress={() => void selectNotificationEvents(option.events)}
+              />
+            ))}
+          </SettingsSection>
+          <Text className="px-2 text-sm text-foreground-muted">
+            Agents notify you only when you ask, in a message or in instructions like AGENTS.md.
+          </Text>
+        </View>
       </ScrollView>
     </SettingsScreen>
   );

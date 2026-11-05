@@ -81,6 +81,7 @@ const idleAwarenessRelay = AgentAwarenessRelay.AgentAwarenessRelay.of({
   drain: Effect.void,
   requestCatchUp: () => Effect.void,
   start: () => Effect.void,
+  publishNotification: () => Effect.die("unused agent notification"),
 });
 
 const idleHttpServer = HttpServer.HttpServer.of({

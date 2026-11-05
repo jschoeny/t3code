@@ -2,16 +2,20 @@ import {
   makeAggregateState,
   TERMINAL_AGENT_ACTIVITY_DISPLAY_TTL_MS,
 } from "./agentActivityAggregate.ts";
-import type {
-  RelayAgentActivityState,
-  RelayDeliveryResult,
-  RelayPublishResponse,
+import {
+  RelayAgentAwarenessPreferences,
+  type RelayAgentActivityState,
+  type RelayAgentNotification,
+  type RelayDeliveryResult,
+  type RelayPublishResponse,
 } from "@t3tools/contracts/relay";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { isTerminalPhase } from "./agentActivityPayloads.ts";
 
@@ -20,7 +24,12 @@ import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
+import type * as ApnsDeliveryQueue from "./ApnsDeliveryQueue.ts";
 import * as FcmDeliveries from "./FcmDeliveries.ts";
+
+const decodePreferences = Schema.decodeUnknownOption(
+  Schema.fromJsonString(RelayAgentAwarenessPreferences),
+);
 
 export type AgentActivityPublishError =
   | FcmDeliveries.FcmDeliveryError
@@ -40,6 +49,18 @@ export class AgentActivityPublisher extends Context.Service<
       readonly threadId: string;
       readonly state: RelayAgentActivityState | null;
     }) => Effect.Effect<RelayPublishResponse, AgentActivityPublishError>;
+    readonly publishNotification: (input: {
+      readonly environmentId: string;
+      readonly environmentPublicKey: string;
+      readonly threadId: string;
+      readonly notification: RelayAgentNotification;
+    }) => Effect.Effect<
+      RelayPublishResponse,
+      | EnvironmentLinks.EnvironmentLinkUserListPersistenceError
+      | LiveActivities.LiveActivityTargetListPersistenceError
+      | ApnsDeliveryQueue.ApnsDeliveryQueueError
+      | FcmDeliveries.FcmDeliveryError
+    >;
     readonly replayForLiveActivityRegistration: (input: {
       readonly userId: string;
       readonly deviceId: string;
@@ -113,6 +134,57 @@ const make = Effect.gen(function* () {
   });
 
   return AgentActivityPublisher.of({
+    // An agent asked for this alert, so turn-event preferences such as notifyOnCompletion do not apply.
+    publishNotification: Effect.fn("relay.agent_activity_publisher.publish_notification")(
+      function* (input) {
+        yield* Effect.annotateCurrentSpan({
+          "relay.environment_id": input.environmentId,
+          "relay.thread_id": input.threadId,
+        });
+        const notification = {
+          title: input.notification.title,
+          body: input.notification.message,
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          deepLink: input.notification.deepLink,
+        };
+        const deliveryUsers = yield* links.listDeliveryUsersForEnvironment({
+          environmentId: input.environmentId,
+          environmentPublicKey: input.environmentPublicKey,
+        });
+        const deliveries = yield* Effect.forEach(
+          deliveryUsers.filter((user) => user.notificationsEnabled),
+          Effect.fnUntraced(function* (deliveryUser) {
+            const targets = yield* liveActivities.listTargets({ userId: deliveryUser.userId });
+            return yield* Effect.forEach(
+              targets.filter((target) =>
+                Option.exists(
+                  decodePreferences(target.preferences_json),
+                  (preferences) => preferences.notificationsEnabled,
+                ),
+              ),
+              Effect.fnUntraced(function* (target) {
+                if (target.platform === "android") {
+                  return yield* fcmDeliveries.enqueue({ target, state: null, notification });
+                }
+                return yield* apnsDeliveries.sendAgentNotificationForTarget({
+                  target,
+                  notification,
+                });
+              }),
+              { concurrency: 4 },
+            );
+          }),
+          { concurrency: 4 },
+        );
+        return {
+          ok: true,
+          deliveries: deliveries
+            .flat()
+            .filter((delivery): delivery is RelayDeliveryResult => delivery !== null),
+        };
+      },
+    ),
     replayForLiveActivityRegistration: Effect.fn(
       "relay.agent_activity_publisher.replay_for_live_activity_registration",
     )(function* (input) {

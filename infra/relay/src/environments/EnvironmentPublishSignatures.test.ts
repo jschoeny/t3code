@@ -6,8 +6,9 @@ import type {
   RelayAgentActivityPublishProofPayload,
   RelayAgentActivityPublishRequest,
   RelayAgentActivityState,
+  RelayAgentNotificationProofPayload,
 } from "@t3tools/contracts/relay";
-import { RELAY_ACTIVITY_PUBLISH_TYP } from "@t3tools/shared/relayJwt";
+import { RELAY_ACTIVITY_PUBLISH_TYP, RELAY_AGENT_NOTIFICATION_TYP } from "@t3tools/shared/relayJwt";
 import { stableStringify } from "@t3tools/shared/relaySigning";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -58,10 +59,12 @@ const isEnvironmentPublishSignatureInvalid = Schema.is(
   EnvironmentPublishSignatures.EnvironmentPublishSignatureInvalid,
 );
 
-function signTestJwt(payload: object, privateKey: string): string {
-  const header = Buffer.from(
-    JSON.stringify({ alg: "EdDSA", typ: RELAY_ACTIVITY_PUBLISH_TYP }),
-  ).toString("base64url");
+function signTestJwt(
+  payload: object,
+  privateKey: string,
+  typ = RELAY_ACTIVITY_PUBLISH_TYP,
+): string {
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ })).toString("base64url");
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signingInput = `${header}.${encodedPayload}`;
   return `${signingInput}.${NodeCrypto.sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
@@ -190,5 +193,37 @@ describe("EnvironmentPublishSignatures", () => {
         }
       }
     }).pipe(Effect.provide(layer({ consume: () => Effect.succeed(false) }))),
+  );
+
+  it.effect("verifies notification JWTs bound to their typ and message", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const notification = { title: "Thread", message: "Done", deepLink: "/threads/env/thread" };
+      const payload = {
+        iss: "t3-env:env",
+        aud: "https://relay.example.test",
+        sub: "env",
+        jti: "notification-jti",
+        iat: Math.floor(now.epochMilliseconds / 1_000),
+        exp: Math.floor(DateTime.add(now, { minutes: 5 }).epochMilliseconds / 1_000),
+        environmentId: state.environmentId,
+        threadId: state.threadId,
+        notification,
+      } satisfies RelayAgentNotificationProofPayload;
+      const signatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
+      const verify = (proof: string, message = notification.message) =>
+        Effect.result(
+          signatures.verifyNotification({
+            environmentId: state.environmentId,
+            environmentPublicKey: keyPair.publicKey,
+            threadId: state.threadId,
+            request: { notification: { ...notification, message }, proof },
+          }),
+        );
+      const proof = signTestJwt(payload, keyPair.privateKey, RELAY_AGENT_NOTIFICATION_TYP);
+      expect(Result.isSuccess(yield* verify(proof))).toBe(true);
+      expect(Result.isFailure(yield* verify(proof, "Tampered"))).toBe(true);
+      expect(Result.isFailure(yield* verify(signTestJwt(payload, keyPair.privateKey)))).toBe(true);
+    }).pipe(Effect.provide(layer())),
   );
 });

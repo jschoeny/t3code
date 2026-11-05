@@ -277,6 +277,31 @@ export const RelayAgentActivityPublishRequest = Schema.Struct({
 }).annotate({ description: "Publishes a signed agent-awareness update from an environment." });
 export type RelayAgentActivityPublishRequest = typeof RelayAgentActivityPublishRequest.Type;
 
+export const RelayAgentNotification = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+  deepLink: TrimmedNonEmptyString,
+});
+export type RelayAgentNotification = typeof RelayAgentNotification.Type;
+
+export const RelayAgentNotificationProofPayload = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  notification: RelayAgentNotification,
+});
+export type RelayAgentNotificationProofPayload = typeof RelayAgentNotificationProofPayload.Type;
+
+export const RelayAgentNotificationPublishRequest = Schema.Struct({
+  notification: RelayAgentNotification,
+  proof: TrimmedNonEmptyString.annotate({
+    description: "Environment-signed JWT covering this notification.",
+  }),
+}).annotate({
+  description: "Sends an agent's one-shot notification without changing the thread's activity.",
+});
+export type RelayAgentNotificationPublishRequest = typeof RelayAgentNotificationPublishRequest.Type;
+
 export const RelayEnvironmentLinkScope = Schema.Literals([
   "agent_activity_notifications",
   "managed_tunnels",
@@ -1252,6 +1277,19 @@ const RelayServerGroup = HttpApiGroup.make("server")
         error: RelayAgentActivityPublishErrors,
       },
     ).annotate(OpenApi.Summary, "Publish agent activity"),
+    HttpApiEndpoint.post(
+      "publishAgentNotification",
+      "/v1/environments/:environmentId/threads/:threadId/agent-notification",
+      {
+        params: Schema.Struct({
+          environmentId: EnvironmentId,
+          threadId: ThreadId,
+        }),
+        payload: RelayAgentNotificationPublishRequest,
+        success: RelayPublishResponse,
+        error: RelayAgentActivityPublishErrors,
+      },
+    ).annotate(OpenApi.Summary, "Send an agent notification"),
     HttpApiEndpoint.post(
       "updateLinkPreferences",
       "/v1/environments/:environmentId/link-preferences",

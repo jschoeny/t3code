@@ -499,6 +499,49 @@ describe("Android delivery routing", () => {
     }).pipe(Effect.provide(h.layer));
   });
 
+  it.effect("sends agent notifications as alert-only messages that keep the card", () => {
+    const h = harness();
+    h.current.target.preferences_json = encodeJson({
+      ...preferences,
+      notifyOnInput: false,
+      notifyOnCompletion: false,
+    });
+    const notification = {
+      title: "Fix notifications",
+      body: "PR #412 is green",
+      environmentId: "env",
+      threadId: "thread",
+      deepLink: "/threads/env/thread",
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* FcmDeliveries.FcmDeliveries;
+      yield* delivery.enqueue({ target, state: null, notification });
+      yield* delivery.enqueue({ target, state: null, notification });
+      const [first, second] = h.queued;
+      yield* delivery.process(first!);
+      yield* delivery.process(first!);
+      yield* delivery.process(second!);
+      expect(h.sent.map((message) => message.alert)).toEqual([true, true, true]);
+      expect(h.sent[0]?.data).toMatchObject({
+        alert_only: "true",
+        active: "true",
+        alert_title: "Fix notifications",
+        alert_body: "PR #412 is green",
+        alert_path: "/threads/env/thread",
+      });
+      // A queue retry repeats its alert id; a second notification gets its own.
+      expect(h.sent[1]?.data.alert_id).toBe(h.sent[0]?.data.alert_id);
+      expect(h.sent[2]?.data.alert_id).not.toBe(h.sent[0]?.data.alert_id);
+      expect(h.marked).toHaveLength(0);
+      h.current.target.preferences_json = encodeJson({
+        ...preferences,
+        notificationsEnabled: false,
+      });
+      yield* delivery.process(first!);
+      expect(h.sent).toHaveLength(3);
+    }).pipe(Effect.provide(h.layer));
+  });
+
   it.effect("leaves iOS devices on their existing delivery path", () => {
     const h = harness();
     return Effect.gen(function* () {

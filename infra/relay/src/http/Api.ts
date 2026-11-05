@@ -1338,6 +1338,61 @@ export const layerServerApi = HttpApiBuilder.group(
 
     return activityHandlers
       .handle(
+        "publishAgentNotification",
+        Effect.fn("relay.api.server.publishAgentNotification")(
+          function* ({ params, payload }) {
+            const principal = yield* RelayEnvironmentPrincipal;
+            if (principal.environmentId !== params.environmentId) {
+              return yield* new HttpApiError.Unauthorized({});
+            }
+            yield* publishSignatures.verifyNotification({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+              threadId: params.threadId,
+              request: payload,
+            });
+            return yield* publisher.publishNotification({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+              threadId: params.threadId,
+              notification: payload.notification,
+            });
+          },
+          mapErrorTags({
+            EnvironmentPublishSignatureExpired: (_error, traceId) =>
+              new RelayAgentActivityPublishProofExpiredError({
+                code: "agent_activity_publish_proof_expired",
+                traceId,
+              }),
+            EnvironmentPublishSignatureInvalid: (_error, traceId) =>
+              new RelayAgentActivityPublishProofInvalidError({
+                code: "agent_activity_publish_proof_invalid",
+                reason: "invalid_signature_or_payload",
+                traceId,
+              }),
+            DpopProofReplayPersistenceError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+            ApnsDeliveryQueueSendError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "upstream_unavailable",
+                traceId,
+              }),
+            FcmDeliveryError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "upstream_unavailable",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
         "registerManagedEndpointRecovery",
         Effect.fn("relay.api.server.registerManagedEndpointRecovery")(
           function* ({ params, payload }) {
