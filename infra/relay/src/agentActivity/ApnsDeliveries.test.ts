@@ -21,6 +21,7 @@ import {
 import * as DeliveryAttempts from "./DeliveryAttempts.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
+import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ApnsDeliveryQueue from "./ApnsDeliveryQueue.ts";
 import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
@@ -152,6 +153,8 @@ function layerFor(input: {
   readonly config?: RelayConfiguration.RelayConfiguration["Service"];
   readonly activityStates?: ReadonlyArray<RelayAgentActivityState>;
   readonly currentActivityStates?: ReadonlyArray<RelayAgentActivityState>;
+  /** The user's link to the job's environment; omitted means linked with notifications on. */
+  readonly link?: "linked" | "muted" | "unlinked";
   readonly execute?: (
     request: HttpClientRequest.HttpClientRequest,
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse>;
@@ -218,6 +221,37 @@ function layerFor(input: {
             Effect.sync(() => {
               input.invalidatedTokens?.push(invalidated);
             }),
+        }),
+        Layer.succeed(EnvironmentLinks.EnvironmentLinks, {
+          upsert: () => Effect.void,
+          listDeliveryUsersForEnvironment: () =>
+            Effect.succeed([
+              {
+                userId: target.user_id,
+                notificationsEnabled: input.link !== "muted",
+                liveActivitiesEnabled: true,
+              },
+            ]),
+          listForUser: () => Effect.succeed([]),
+          getForUser: ({ environmentId }) =>
+            Effect.succeed(
+              input.link === "unlinked"
+                ? null
+                : {
+                    environmentId: EnvironmentId.make(environmentId),
+                    label: "Desktop",
+                    environmentPublicKey: "key",
+                    linkedAt: state.updatedAt,
+                    endpoint: {
+                      httpBaseUrl: "https://env.test",
+                      wsBaseUrl: "wss://env.test",
+                      providerKind: "manual",
+                    },
+                  },
+            ),
+          findActiveManagedForEnvironment: () => Effect.succeed([]),
+          setHoldWebhooksWhileOffline: () => Effect.void,
+          revokeForUser: () => Effect.succeed(false),
         }),
         RelayConfiguration.layer(input.config ?? config),
         input.execute
@@ -606,66 +640,72 @@ describe("ApnsDeliveries", () => {
     },
   );
 
-  it.effect("processes signed push notification jobs through APNs and records attempts", () => {
-    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
-    const payload = makeApnsDeliveryJobPayload({
-      kind: "push_notification",
-      userId: target.user_id,
-      deviceId: target.device_id,
-      token: "apns-device-token",
-      aggregate: null,
-      notification: {
-        title: "Thread",
-        body: "Input: Project",
-        environmentId: "env",
-        threadId: "thread",
-        deepLink: "/",
-      },
-      createdAt: "1970-01-01T00:00:00.000Z",
-      expiresAt: "1970-01-01T00:10:00.000Z",
-      jobId: "job-push-1",
-    });
-    const signed = signApnsDeliveryJob({
-      secret: config.apnsDeliveryJobSigningSecret,
-      payload,
-    });
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 })));
-
-    return Effect.gen(function* () {
-      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
-      const result = yield* deliveries.processSignedJob(yield* signed);
-
-      expect(result.kind).toBe("push_notification");
-      expect(result.ok).toBe(true);
-      expect(result.apnsStatus).toBe(200);
-      expect(attempts).toMatchObject([
-        {
-          kind: "push_notification",
-          sourceJobId: "job-push-1",
-          token: "apns-device-token",
+  it.effect.each(["linked", "muted", "unlinked"] as const)(
+    "sends signed push notification jobs only while the environment link allows it (%s)",
+    (link) => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      const payload = makeApnsDeliveryJobPayload({
+        kind: "push_notification",
+        userId: target.user_id,
+        deviceId: target.device_id,
+        token: "apns-device-token",
+        aggregate: null,
+        notification: {
+          title: "Thread",
+          body: "Input: Project",
           environmentId: "env",
           threadId: "thread",
-          deviceId: target.device_id,
-          apnsStatus: 200,
+          deepLink: "/",
         },
-      ]);
-    }).pipe(
-      Effect.provide(
-        layerFor({
-          attempts,
-          currentTargets: [
-            {
-              ...target,
-              push_token: "apns-device-token",
-            },
-          ],
-          config: signingConfig,
-          execute,
-        }),
-      ),
-    );
-  });
+        createdAt: "1970-01-01T00:00:00.000Z",
+        expiresAt: "1970-01-01T00:10:00.000Z",
+        jobId: "job-push-1",
+      });
+      const signed = signApnsDeliveryJob({
+        secret: config.apnsDeliveryJobSigningSecret,
+        payload,
+      });
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 })));
+
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.processSignedJob(yield* signed);
+
+        expect(result.kind).toBe("push_notification");
+        expect(result.ok).toBe(true);
+        expect(result.apnsStatus).toBe(link === "linked" ? 200 : null);
+        expect(attempts).toMatchObject([
+          {
+            kind: "push_notification",
+            sourceJobId: "job-push-1",
+            token: "apns-device-token",
+            environmentId: "env",
+            threadId: "thread",
+            deviceId: target.device_id,
+            ...(link === "linked"
+              ? { apnsStatus: 200 }
+              : { apnsReason: "Stale agent activity state skipped." }),
+          },
+        ]);
+      }).pipe(
+        Effect.provide(
+          layerFor({
+            attempts,
+            currentTargets: [
+              {
+                ...target,
+                push_token: "apns-device-token",
+              },
+            ],
+            config: signingConfig,
+            link,
+            execute,
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("skips duplicate signed queue jobs before calling APNs", () => {
     const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];

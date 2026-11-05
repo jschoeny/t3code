@@ -181,16 +181,20 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const notificationEvents = AsyncResult.isSuccess(preferencesResult)
     ? (preferencesResult.value.notificationEvents ?? "everything")
     : null;
+  const [notificationEventsUpdating, setNotificationEventsUpdating] = useState(false);
   const selectNotificationEvents = async (
     events: (typeof NOTIFICATION_EVENT_OPTIONS)[number]["events"],
   ) => {
-    if (events === notificationEvents) return;
+    if (events === notificationEvents || notificationEventsUpdating) return;
     savePreferences({ notificationEvents: events });
+    // One registration at a time, so a quick second tap cannot be overtaken by the first.
+    setNotificationEventsUpdating(true);
     const result = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         updateAgentAwarenessRegistrationPreferences({ notificationEvents: events }),
       ),
     );
+    setNotificationEventsUpdating(false);
     // The saved choice is sent again with the next registration refresh.
     if (result._tag === "Failure") {
       reportAtomCommandResult(result, { label: "notification events update" });
@@ -523,7 +527,11 @@ function ConfiguredSettingsNotificationsRouteScreen() {
                 description={option.description}
                 selected={notificationEvents === option.events}
                 separated={index > 0}
-                disabled={notificationEvents === null || !agentAwarenessPushAvailable}
+                disabled={
+                  notificationEvents === null ||
+                  notificationEventsUpdating ||
+                  !agentAwarenessPushAvailable
+                }
                 onPress={() => void selectNotificationEvents(option.events)}
               />
             ))}
