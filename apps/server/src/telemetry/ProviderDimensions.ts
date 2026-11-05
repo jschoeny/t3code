@@ -166,6 +166,8 @@ export function handoffSettings(tool: string, args: unknown, result: unknown): F
       return defined({ delivery: stringField(output, "delivery") });
     case "t3_thread_send_attachments":
       return { delivery: "auto" };
+    case "t3_notify":
+      return defined({ phone: stringField(output, "phone") });
     case "schedule_task":
       return { bindToCurrentThread: input.bindToCurrentThread !== false };
     default:

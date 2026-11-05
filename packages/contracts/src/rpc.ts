@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
+import { AgentNotification } from "./agentNotification.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ProviderAuthCancelInput,
@@ -538,6 +539,7 @@ export const WS_METHODS = {
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  serverSubscribeAgentNotifications: "server.subscribeAgentNotifications",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1004,6 +1006,16 @@ const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientAc
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
 });
+
+const WsServerSubscribeAgentNotificationsRpc = Rpc.make(
+  WS_METHODS.serverSubscribeAgentNotifications,
+  {
+    payload: Schema.Struct({}),
+    success: AgentNotification,
+    error: EnvironmentAuthorizationError,
+    stream: true,
+  },
+);
 
 const PullRequestRpcError = Schema.Union([
   PullRequestUnavailableError,
@@ -2075,6 +2087,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
+  WsServerSubscribeAgentNotificationsRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

@@ -43,7 +43,8 @@ export function makeRelayDeviceRegistrationRequest(
       notificationsEnabled: pushAvailable && input.notificationsEnabled,
       notifyOnApproval: true,
       notifyOnInput: true,
-      notifyOnCompletion: true,
+      // Custom leaves finished turns to agents the user asked to notify.
+      notifyOnCompletion: input.preferences.notificationEvents !== "custom",
       notifyOnFailure: true,
     },
   };

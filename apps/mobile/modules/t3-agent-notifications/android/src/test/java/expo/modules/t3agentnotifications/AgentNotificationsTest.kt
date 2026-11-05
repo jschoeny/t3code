@@ -105,6 +105,21 @@ class AgentNotificationsTest : AgentNotificationsFixture() {
   }
 
   @Test
+  fun alertOnlyLeavesTheActivityCardInPlace() {
+    AgentNotifications.receive(context, update("activity", true))
+    val card = manager.activeNotifications.single { it.tag == "t3-agent-activity" }
+
+    val alert = update("ping", true).toMutableMap()
+    alert["alert_only"] = "true"
+    alert.remove("active")
+    alert.remove("activity_expires_at")
+    AgentNotifications.receive(context, alert)
+
+    assertEquals(card.id, manager.activeNotifications.single { it.tag == "t3-agent-activity" }.id)
+    assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+  }
+
+  @Test
   fun foregroundSuppressesAlertsWhileOngoingActivityStillUpdatesAndClears() {
     lifecycle.currentState = Lifecycle.State.RESUMED
 

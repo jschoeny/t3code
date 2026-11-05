@@ -641,6 +641,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["notification sound alert completion input approval desktop"],
   },
   {
+    id: "notification-events",
+    title: "Alert me about",
+    to: "/settings/general",
+    searchTerms: ["notification custom completion finished agent t3_notify agents.md quiet"],
+  },
+  {
     id: "in-app-notifications",
     title: "In-app notifications",
     to: "/settings/general",

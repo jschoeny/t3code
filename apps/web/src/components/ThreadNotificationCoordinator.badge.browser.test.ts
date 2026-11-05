@@ -2,13 +2,14 @@ import type { AnyRouter } from "@tanstack/react-router";
 import { EnvironmentId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 import { stubGlobal } from "../../test/render";
 
 const state = vi.hoisted(() => ({
   mode: "notifications",
+  events: "everything",
   inApp: false,
   toast: vi.fn(),
   shells: null as unknown as { set: (id: string, value: unknown) => void },
@@ -57,6 +58,17 @@ vi.mock(import("../state/threads"), async (original) => {
     },
   };
 });
+vi.mock(import("../state/server"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      agentNotifications: (({ environmentId }: { environmentId: string }) =>
+        agentNotificationsAtom(environmentId)) as never,
+    },
+  };
+});
 vi.mock(import("../hooks/useSettings"), async (original) => ({
   ...(await original()),
   subscribeClientSettings: ((listener: () => void) => {
@@ -65,6 +77,7 @@ vi.mock(import("../hooks/useSettings"), async (original) => ({
   }) as never,
   getClientSettings: (() => ({
     notificationMode: state.mode,
+    notificationEvents: state.events,
     inAppNotificationsEnabled: state.inApp,
   })) as never,
 }));
@@ -80,6 +93,9 @@ import { startThreadNotifications } from "./ThreadNotificationCoordinator";
 let registry: AtomRegistry.AtomRegistry;
 const shellAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
 const environmentIdsAtom = Atom.make<ReadonlyArray<string>>([]);
+const agentNotificationsAtom = Atom.family((_id: string) =>
+  Atom.make<AsyncResult.AsyncResult<unknown>>(AsyncResult.initial()),
+);
 const noRequestsAtom = Atom.make(new Map());
 const noDelegatedAtom = Atom.make<ReadonlySet<string>>(new Set<string>());
 state.shells = { set: (id, value) => registry.set(shellAtom(id), value) };
@@ -187,6 +203,7 @@ function setup() {
   const testRegistry = registry;
   stack.defer(() => testRegistry.dispose());
   state.mode = "notifications";
+  state.events = "everything";
   state.inApp = false;
   state.settingsListeners.clear();
   registry.set(environmentIdsAtom, ["one", "two"]);
@@ -252,6 +269,33 @@ it("presents completion notifications and sound as soon as the shell completes",
   );
   expect(TestNotification.sent.map((sent) => sent.title)).toEqual(["Thread completed"]);
   expect(state.sound).toHaveBeenCalledWith("completion", expect.any(Function));
+});
+
+it("in Custom, skips completions but presents input and agent notifications", async () => {
+  await using app = setup();
+  state.events = "custom";
+  app.start();
+  state.shells.set(
+    "one",
+    shell({
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
+    }),
+  );
+  state.shells.set("one", shell({ hasPendingUserInput: true }));
+  const sent = { threadId: "thread", title: "Test thread", message: "PR is green" };
+  registry.set(agentNotificationsAtom("two"), AsyncResult.success(sent));
+  // A refresh of the same value is not a new notification.
+  registry.set(agentNotificationsAtom("two"), AsyncResult.success(sent, { waiting: true }));
+
+  expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
+    ["Input needed", "Test thread"],
+    ["Test thread", "PR is green"],
+  ]);
+  TestNotification.sent[1]!.dispatchEvent(new Event("click"));
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: EnvironmentId.make("two"), threadId: "thread" },
+  });
 });
 
 it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(

@@ -275,6 +275,10 @@ export const NotificationMode = Schema.Literals([
 ]);
 export type NotificationMode = typeof NotificationMode.Type;
 
+/** "custom" skips finished-turn alerts; agents notify through t3_notify when asked. */
+export const NotificationEvents = Schema.Literals(["everything", "custom"]);
+export type NotificationEvents = typeof NotificationEvents.Type;
+
 export const QuitConfirmationMode = Schema.Literals(["direct", "hold", "double-click"]);
 export type QuitConfirmationMode = typeof QuitConfirmationMode.Type;
 const DEFAULT_QUIT_CONFIRMATION_MODE: QuitConfirmationMode = "hold";
@@ -389,6 +393,9 @@ export type VoiceTranscriptionDestination = typeof VoiceTranscriptionDestination
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
+  ),
+  notificationEvents: NotificationEvents.pipe(
+    Schema.withDecodingDefault(Effect.succeed("everything" as const)),
   ),
   inAppNotificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffColorScheme: DiffColorScheme.pipe(
@@ -1857,6 +1864,7 @@ export function requiredScopesForProjectMutation(
 
 export const ClientSettingsPatch = Schema.Struct({
   notificationMode: Schema.optionalKey(NotificationMode),
+  notificationEvents: Schema.optionalKey(NotificationEvents),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),

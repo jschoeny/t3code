@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   hasDesktopNotifications,
   hasNotificationSound,
+  NOTIFICATION_EVENT_OPTIONS,
   NOTIFICATION_MODE_LABELS,
   unlockNotificationAudio,
 } from "../../threadNotifications";
@@ -21,10 +22,7 @@ export function NotificationSettings() {
   return (
     <SettingsRow
       {...searchableSetting("thread-notifications")}
-      description={
-        permissionMessage ??
-        "System alerts when a thread finishes, fails, or needs input or approval. Applies to this device while T3 Code is open."
-      }
+      description={permissionMessage ?? "How alerts reach this device while T3 Code is open."}
       control={
         <Select
           value={mode}
@@ -72,6 +70,46 @@ export function NotificationSettings() {
             {Object.entries(NOTIFICATION_MODE_LABELS).map(([value, label]) => (
               <SelectItem key={value} hideIndicator value={value}>
                 {label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
+}
+
+export function NotificationEventsSettings() {
+  const events = useScopedSettings((settings) => settings.notificationEvents);
+  const updateSettings = useUpdateScopedSettings();
+
+  return (
+    <SettingsRow
+      {...searchableSetting("notification-events")}
+      description={
+        events === "custom"
+          ? "Custom: agents notify you only when you ask, in a message or in instructions like AGENTS.md."
+          : "Which events alert. Custom skips finished turns, so agents notify you only when you ask."
+      }
+      control={
+        <Select
+          value={events}
+          onValueChange={(value) => {
+            if (value === "everything" || value === "custom") {
+              updateSettings({ notificationEvents: value });
+            }
+          }}
+        >
+          <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Alert me about">
+            <SelectValue>{NOTIFICATION_EVENT_OPTIONS[events].label}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {Object.entries(NOTIFICATION_EVENT_OPTIONS).map(([value, option]) => (
+              <SelectItem key={value} hideIndicator value={value}>
+                <span className="flex max-w-64 flex-col gap-0.5">
+                  <span>{option.label}</span>
+                  <span className="text-xs text-muted-foreground">{option.description}</span>
+                </span>
               </SelectItem>
             ))}
           </SelectPopup>

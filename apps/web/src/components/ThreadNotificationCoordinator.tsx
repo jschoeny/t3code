@@ -9,8 +9,9 @@ import { threadKey } from "@t3tools/client-runtime/state/entities";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as Option from "effect/Option";
-import type { AtomRegistry } from "effect/reactivity";
+import { AsyncResult, type AtomRegistry } from "effect/reactivity";
 import {
+  BellIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   MessageCircleQuestionIcon,
@@ -20,6 +21,7 @@ import {
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { isWindowsPlatform } from "../lib/utils";
 import { environmentSummaries } from "../state/presentation";
+import { serverEnvironment } from "../state/server";
 import { environmentShell } from "../state/shell";
 import { environmentThreadShells } from "../state/threads";
 import {
@@ -44,6 +46,15 @@ interface NotificationState extends ThreadNotificationObservation {
   readonly thread: EnvironmentThreadShell;
   readonly status: SidebarThreadStatus;
 }
+
+/** One alert: a turn event from the gate, or a notification an agent sent with `t3_notify`. */
+type Notice =
+  | { readonly kind: "agent"; readonly title: string; readonly body: string }
+  | {
+      readonly kind: ThreadNotificationKind;
+      readonly body: string;
+      readonly status: SidebarThreadStatus;
+    };
 
 type ToastId = ReturnType<typeof toastManager.add>;
 
@@ -111,16 +122,13 @@ export function startThreadNotifications(
     setNotificationBadge(0);
   };
 
-  const present = (
-    environmentId: EnvironmentId,
-    state: NotificationState,
-    kind: ThreadNotificationKind,
-  ) => {
-    const { thread, status } = state;
+  const present = (environmentId: EnvironmentId, threadId: ThreadId, notice: Notice) => {
+    const { kind } = notice;
+    const status = notice.kind === "agent" ? null : notice.status;
     if (
       registry
         .get(environmentThreadShells.hiddenThreadKeysAtom)
-        .has(threadKey({ environmentId, threadId: thread.id }))
+        .has(threadKey({ environmentId, threadId }))
     )
       return;
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
@@ -129,19 +137,21 @@ export function startThreadNotifications(
       threadId?: string;
     };
     const title =
-      kind === "completion"
-        ? "Thread completed"
-        : status === "approval"
-          ? "Approval needed"
-          : status === "limited"
-            ? "Usage limit reached"
-            : status === "failed"
-              ? "Thread failed"
-              : status === "request"
-                ? "Guest request"
-                : "Input needed";
+      notice.kind === "agent"
+        ? notice.title
+        : kind === "completion"
+          ? "Thread completed"
+          : status === "approval"
+            ? "Approval needed"
+            : status === "limited"
+              ? "Usage limit reached"
+              : status === "failed"
+                ? "Thread failed"
+                : status === "request"
+                  ? "Guest request"
+                  : "Input needed";
     if (hasNotificationSound(mode)) {
-      void playNotificationSound(kind, () =>
+      void playNotificationSound(kind === "completion" ? "completion" : "input", () =>
         hasNotificationSound(getClientSettings().notificationMode),
       );
     }
@@ -149,18 +159,27 @@ export function startThreadNotifications(
       inAppNotificationsEnabled &&
       document.visibilityState === "visible" &&
       document.hasFocus() &&
-      (active.environmentId !== environmentId || active.threadId !== thread.id)
+      (active.environmentId !== environmentId || active.threadId !== threadId)
     ) {
-      const toastKey = threadKey({ environmentId, threadId: thread.id });
+      const toastKey = threadKey({ environmentId, threadId });
       const toastId: ToastId = toastManager.add({
         onRemove: (): void => forgetToast(toastKey, toastId),
-        type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
+        type:
+          kind === "agent"
+            ? "info"
+            : kind === "completion"
+              ? "success"
+              : status === "failed"
+                ? "error"
+                : "warning",
         title,
-        description: thread.title,
+        description: notice.body,
         data: {
           hideCopyButton: true,
           leadingIcon:
-            kind === "completion" ? (
+            kind === "agent" ? (
+              <BellIcon aria-hidden className="size-4 text-info-foreground" />
+            ) : kind === "completion" ? (
               <CircleCheckIcon aria-hidden className="size-4 text-success-foreground" />
             ) : status === "approval" ? (
               <ShieldQuestionIcon aria-hidden className="size-4 text-warning-foreground" />
@@ -178,7 +197,7 @@ export function startThreadNotifications(
             toastManager.close(toastId);
             void router.navigate({
               to: "/$environmentId/$threadId",
-              params: { environmentId, threadId: thread.id },
+              params: { environmentId, threadId },
             });
           },
         },
@@ -195,20 +214,20 @@ export function startThreadNotifications(
       return;
     try {
       const notification = new Notification(title, {
-        body: thread.title,
-        tag: threadNotificationTag(environmentId, thread.id),
+        body: notice.body,
+        tag: threadNotificationTag(environmentId, threadId),
         silent: true,
         // Windows drops clicks after a toast moves into Notification Center.
-        requireInteraction: kind === "completion" && isWindowsPlatform(navigator.platform),
+        requireInteraction: kind !== "input" && isWindowsPlatform(navigator.platform),
       });
-      trackNotification(environmentId, thread.id, notification);
+      trackNotification(environmentId, threadId, notification);
       notification.addEventListener("click", () => {
         notification.close();
         window.focus();
         void window.desktopBridge?.revealWindow().catch(() => undefined);
         void router.navigate({
           to: "/$environmentId/$threadId",
-          params: { environmentId, threadId: thread.id },
+          params: { environmentId, threadId },
         });
       });
     } catch {
@@ -292,7 +311,15 @@ export function startThreadNotifications(
       unsubscribe: () => {},
       gate: createThreadNotificationGate<ThreadId>((threadId, kind) => {
         const state = entry.previous.get(threadId);
-        if (state) present(environmentId, state, kind);
+        // Custom leaves finished turns to agents the user asked to notify.
+        if (kind === "completion" && getClientSettings().notificationEvents === "custom") return;
+        if (state) {
+          present(environmentId, threadId, {
+            kind,
+            body: state.thread.title,
+            status: state.status,
+          });
+        }
       }),
     };
     let threads: ReadonlyArray<OrchestrationV2ThreadShell> | null = null;
@@ -322,8 +349,28 @@ export function startThreadNotifications(
       environmentThreadShells.delegatedUnderParentAtom,
       reobserve,
     );
+    const agentNotificationsAtom = serverEnvironment.agentNotifications({
+      environmentId,
+      input: {},
+    });
+    // The atom holds the latest notification, so only a new value is a new alert.
+    let lastAgentNotification = AsyncResult.getOrElse(
+      registry.get(agentNotificationsAtom),
+      () => null,
+    );
+    const unsubscribeAgentNotifications = registry.subscribe(agentNotificationsAtom, (result) => {
+      const notification = AsyncResult.getOrElse(result, () => null);
+      if (notification === null || notification === lastAgentNotification) return;
+      lastAgentNotification = notification;
+      present(environmentId, notification.threadId, {
+        kind: "agent",
+        title: notification.title,
+        body: notification.message,
+      });
+    });
     entry.unsubscribe = () => {
       unsubscribeShell();
+      unsubscribeAgentNotifications();
       unsubscribeRequests();
       unsubscribeDelegated();
       entry.gate.clear();

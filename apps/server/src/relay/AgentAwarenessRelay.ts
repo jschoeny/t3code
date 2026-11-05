@@ -1,6 +1,7 @@
 import type { AgentAwarenessThread } from "../orchestration-v2/ProjectionStore.ts";
 import {
   isListedThreadLineage,
+  type AgentNotification,
   type EnvironmentId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
@@ -11,12 +12,21 @@ import {
   RelayApi,
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
+  type RelayAgentNotification,
+  type RelayAgentNotificationProofPayload,
 } from "@t3tools/contracts/relay";
-import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import {
+  buildAgentAwarenessDeepLink,
+  projectThreadAwarenessV2,
+} from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
-import { normalizeRelayIssuer, RELAY_ACTIVITY_PUBLISH_TYP } from "@t3tools/shared/relayJwt";
+import {
+  normalizeRelayIssuer,
+  RELAY_ACTIVITY_PUBLISH_TYP,
+  RELAY_AGENT_NOTIFICATION_TYP,
+} from "@t3tools/shared/relayJwt";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -55,8 +65,17 @@ export class AgentAwarenessRelay extends Context.Service<
     readonly drain: Effect.Effect<void>;
     readonly requestCatchUp: () => Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+    /** Sends a one-shot phone notification; never touches the thread's published activity. */
+    readonly publishNotification: (
+      notification: AgentNotification,
+    ) => Effect.Effect<AgentNotificationPhoneResult>;
   }
 >()("t3/relay/AgentAwarenessRelay") {}
+
+export interface AgentNotificationPhoneResult {
+  readonly phone: "queued" | "no_devices" | "not_connected" | "failed";
+  readonly phoneDevices: number;
+}
 
 function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;
@@ -265,6 +284,29 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
   } satisfies RelayAgentActivityPublishProofPayload;
   const signingKey = yield* EnvironmentSigningKey;
   return yield* signingKey.sign({ typ: RELAY_ACTIVITY_PUBLISH_TYP, payload });
+});
+
+const makeNotificationProof = Effect.fn("makeNotificationProof")(function* (input: {
+  readonly relayIssuer: string;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly notification: RelayAgentNotification;
+  readonly jti: string;
+}) {
+  const now = yield* DateTime.now;
+  const payload = {
+    iss: `t3-env:${input.environmentId}`,
+    aud: normalizeRelayIssuer(input.relayIssuer),
+    sub: input.environmentId,
+    jti: input.jti,
+    iat: Math.floor(now.epochMilliseconds / 1_000),
+    exp: Math.floor(DateTime.add(now, { minutes: 5 }).epochMilliseconds / 1_000),
+    environmentId: input.environmentId,
+    threadId: input.threadId,
+    notification: input.notification,
+  } satisfies RelayAgentNotificationProofPayload;
+  const signingKey = yield* EnvironmentSigningKey;
+  return yield* signingKey.sign({ typ: RELAY_AGENT_NOTIFICATION_TYP, payload });
 });
 
 function describeThreadShellForAwareness(
@@ -829,6 +871,49 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const publishNotification = Effect.fn("AgentAwarenessRelay.publishNotification")(
+    function* (notification: AgentNotification) {
+      const relayConfig = yield* readRelayConfig;
+      if (!relayConfig || !(yield* readPublishAgentActivityEnabled)) {
+        return { phone: "not_connected", phoneDevices: 0 } satisfies AgentNotificationPhoneResult;
+      }
+      const environmentId = yield* serverEnvironment.getEnvironmentId;
+      const payload = {
+        title: notification.title,
+        message: notification.message,
+        deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: notification.threadId }),
+      };
+      const proof = yield* makeNotificationProof({
+        relayIssuer: relayConfig.issuer,
+        environmentId,
+        threadId: notification.threadId,
+        notification: payload,
+        jti: yield* random.uuidV4(),
+      }).pipe(Effect.provideService(EnvironmentSigningKey, signingKey));
+      // A fresh client: the activity publisher's cached one resets its published state on change.
+      const relayClient = yield* makeRelayClient(relayConfig);
+      const response = yield* relayClient.server
+        .publishAgentNotification({
+          params: { environmentId, threadId: notification.threadId },
+          payload: { notification: payload, proof },
+        })
+        .pipe(Effect.timeout("10 seconds"));
+      const phoneDevices = response.deliveries.filter((delivery) => delivery.ok).length;
+      return {
+        phone:
+          phoneDevices > 0 ? "queued" : response.deliveries.length > 0 ? "failed" : "no_devices",
+        phoneDevices,
+      } satisfies AgentNotificationPhoneResult;
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("agent notification relay publish failed", {
+        cause: Cause.pretty(cause),
+      }).pipe(
+        Effect.as({ phone: "failed", phoneDevices: 0 } satisfies AgentNotificationPhoneResult),
+      ),
+    ),
+  );
+
   return AgentAwarenessRelay.of({
     publishThread,
     drain: worker.drain,
@@ -836,6 +921,7 @@ export const make = Effect.gen(function* () {
       return Queue.offer(catchUpRequests, undefined).pipe(Effect.asVoid);
     }),
     start,
+    publishNotification,
   });
 });
 

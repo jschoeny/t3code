@@ -128,7 +128,8 @@ object AgentNotifications {
       channels(context)
       val scheme = prefs.getString("scheme", "t3code") ?: "t3code"
       val alerted = showAlert(context, prefs, scheme, data)
-      updateActivity(context, prefs, data, updatedAt, alerted)
+      // An agent notification carries no card transition; its missing fields would end the card.
+      if (data["alert_only"] != "true") updateActivity(context, prefs, data, updatedAt, alerted)
     }
   }
 

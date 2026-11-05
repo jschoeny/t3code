@@ -1387,6 +1387,7 @@ describe("relay routing fallback", () => {
             published.push(input);
             return { ok: true as const, deliveries: [] };
           }),
+        publishNotification: () => Effect.die("unused"),
         replayForLiveActivityRegistration: () => Effect.succeed(null),
         endIdleLiveActivities: Effect.void,
       });
@@ -1397,6 +1398,7 @@ describe("relay routing fallback", () => {
             Effect.sync(() => {
               verified.push(input);
             }),
+          verifyNotification: () => Effect.die("unused"),
         },
       );
       const layerAuth = Layer.succeed(RelayEnvironmentAuth, {

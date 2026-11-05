@@ -795,6 +795,28 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
 
+export const OrchestratorMcpNotifyInput = Schema.Struct({
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(240)).annotate({
+    description: "One line: what finished or what you need.",
+  }),
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(80))).annotate({
+    description: "Defaults to the thread title.",
+  }),
+});
+export type OrchestratorMcpNotifyInput = typeof OrchestratorMcpNotifyInput.Type;
+
+export const OrchestratorMcpNotifyResult = Schema.Struct({
+  clients: NonNegativeInt.annotate({
+    description: "Open T3 Code apps it was sent to. Each shows it only if its settings allow.",
+  }),
+  phone: Schema.Literals(["queued", "no_devices", "not_connected", "failed"]).annotate({
+    description:
+      "queued: T3 Connect accepted it for `phoneDevices` phones; arrival is not confirmed. no_devices: no linked phone has notifications on. not_connected: no T3 Connect link, or agent activity sharing is off.",
+  }),
+  phoneDevices: NonNegativeInt,
+});
+export type OrchestratorMcpNotifyResult = typeof OrchestratorMcpNotifyResult.Type;
+
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
     description:

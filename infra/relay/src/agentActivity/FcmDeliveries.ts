@@ -6,6 +6,7 @@ import {
   type RelayDeliveryResult,
 } from "@t3tools/contracts/relay";
 import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as PlatformError from "effect/PlatformError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -39,6 +40,17 @@ export const FcmDeliveryJob = Schema.Struct({
   state: Schema.NullOr(RelayAgentActivityState),
   queuedAt: Schema.Number,
   replay: Schema.optional(Schema.Boolean),
+  // An agent's one-shot alert. Its eventId is fixed at enqueue, so queue retries stay one alert.
+  notification: Schema.optional(
+    Schema.Struct({
+      title: Schema.String,
+      body: Schema.String,
+      deepLink: Schema.String,
+      environmentId: Schema.String,
+      threadId: Schema.String,
+      eventId: Schema.String,
+    }),
+  ),
 });
 export type FcmDeliveryJob = typeof FcmDeliveryJob.Type;
 const decodeJob = Schema.decodeUnknownEffect(FcmDeliveryJob);
@@ -120,6 +132,7 @@ export class FcmDeliveries extends Context.Service<
       readonly target: LiveActivities.TargetRow;
       readonly state: RelayAgentActivityState | null;
       readonly replay?: boolean;
+      readonly notification?: Omit<NonNullable<FcmDeliveryJob["notification"]>, "eventId">;
     }) => Effect.Effect<RelayDeliveryResult | null, FcmDeliveryError>;
     readonly process: (
       body: unknown,
@@ -140,6 +153,7 @@ export class FcmDeliveries extends Context.Service<
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
   const crypto = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const sender = yield* FcmDeliveryQueueSender.FcmDeliveryQueueSender;
   const client = yield* FcmClient.FcmClient;
   const devices = yield* LiveActivities.LiveActivities;
@@ -162,6 +176,12 @@ const make = Effect.gen(function* () {
         };
       }
       const now = yield* DateTime.now;
+      const notification = input.notification && {
+        ...input.notification,
+        eventId: yield* random
+          .uuidV4()
+          .pipe(Effect.mapError((cause) => new FcmDeliveryError({ operation: "enqueue", cause }))),
+      };
       yield* sender
         .send({
           userId: input.target.user_id,
@@ -169,6 +189,7 @@ const make = Effect.gen(function* () {
           token: input.target.push_token,
           state: input.state,
           ...(input.replay ? { replay: true } : {}),
+          ...(notification ? { notification } : {}),
           queuedAt: now.epochMilliseconds,
         })
         .pipe(Effect.mapError((cause) => new FcmDeliveryError({ operation: "enqueue", cause })));
@@ -208,6 +229,81 @@ const make = Effect.gen(function* () {
         terminalState: null,
         nowMs: now.epochMilliseconds,
       });
+      const send = Effect.fnUntraced(function* (data: Record<string, string>, alert: boolean) {
+        if (data.alert_id) {
+          // Hash the full stable group identity to stay within the payload budget.
+          const digest = yield* crypto.digest(
+            Digest.sha256,
+            new TextEncoder().encode(data.alert_id),
+          );
+          data.alert_id = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+        }
+        const result = yield* client.send({
+          token: job.token,
+          packageName: target.bundle_id,
+          alert,
+          data: fitFcmData(data),
+        });
+        if (result.unregistered) {
+          yield* db
+            .update(relayMobileDevices)
+            .set({ pushToken: null })
+            .where(
+              and(
+                eq(relayMobileDevices.userId, job.userId),
+                eq(relayMobileDevices.deviceId, job.deviceId),
+                eq(relayMobileDevices.pushToken, job.token),
+              ),
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) => new FcmDeliveryError({ operation: "invalidate-token", cause }),
+              ),
+            );
+        }
+        return result;
+      });
+
+      if (job.notification) {
+        const notification = job.notification;
+        if (!preferences.value.notificationsEnabled) return;
+        // A queued alert can outlive the link or its notification permission.
+        const link = yield* links.getForUser({
+          userId: job.userId,
+          environmentId: notification.environmentId,
+        });
+        const deliveryUsers = link
+          ? yield* links.listDeliveryUsersForEnvironment({
+              environmentId: notification.environmentId,
+              environmentPublicKey: link.environmentPublicKey,
+            })
+          : [];
+        if (!deliveryUsers.some((user) => user.userId === job.userId && user.notificationsEnabled))
+          return;
+        yield* send(
+          {
+            t3_kind: "agent_activity",
+            // Current clients skip the card update; older ones need its fields to keep the card.
+            alert_only: "true",
+            device_id: job.deviceId,
+            user_id: job.userId,
+            updated_at: String(now.epochMilliseconds),
+            ...androidActivityData(preferences.value.liveActivitiesEnabled ? aggregate : null),
+            alert_id: [
+              notification.environmentId,
+              notification.threadId,
+              notification.eventId,
+            ].join("\n"),
+            alert_group: `${notification.environmentId}/${notification.threadId}`,
+            alert_title: notification.title,
+            alert_body: notification.body,
+            alert_path: notification.deepLink,
+          },
+          true,
+        );
+        return;
+      }
+
       const previousAggregate = target.last_aggregate_json
         ? Option.getOrNull(decodePreviousActivity(target.last_aggregate_json))
         : null;
@@ -295,37 +391,9 @@ const make = Effect.gen(function* () {
         ...androidActivityData(displayedAggregate),
         ...alert,
       };
-      if (alert) {
-        // Hash the full stable group identity to stay within the payload budget.
-        const digest = yield* crypto.digest(
-          Digest.sha256,
-          new TextEncoder().encode(alert.alert_id),
-        );
-        data.alert_id = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-      }
-      const result = yield* client.send({
-        token: job.token,
-        packageName: target.bundle_id,
-        alert: alert !== null,
-        data: fitFcmData(data),
-      });
-      if (result.unregistered) {
-        yield* db
-          .update(relayMobileDevices)
-          .set({ pushToken: null })
-          .where(
-            and(
-              eq(relayMobileDevices.userId, job.userId),
-              eq(relayMobileDevices.deviceId, job.deviceId),
-              eq(relayMobileDevices.pushToken, job.token),
-            ),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) => new FcmDeliveryError({ operation: "invalidate-token", cause }),
-            ),
-          );
-      } else if (acknowledgeAggregate) {
+      const result = yield* send(data, alert !== null);
+      if (result.unregistered) return;
+      if (acknowledgeAggregate) {
         yield* devices.markDelivery({
           userId: job.userId,
           deviceId: job.deviceId,

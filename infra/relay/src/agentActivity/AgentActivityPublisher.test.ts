@@ -108,6 +108,7 @@ function makeApnsDeliveries(
   return {
     sendForTarget: () => Effect.succeed(null),
     sendPushNotificationForTarget: () => Effect.succeed(null),
+    sendAgentNotificationForTarget: () => Effect.succeed(null),
     sendLiveActivity: () =>
       Effect.succeed({
         deviceId: "device",
@@ -179,6 +180,85 @@ describe("AgentActivityPublisher", () => {
                   sendForTarget: (input) =>
                     Effect.sync(() => {
                       appleDevices.push(input.target.device_id);
+                      return null;
+                    }),
+                }),
+              ),
+              Layer.succeed(FcmDeliveries.FcmDeliveries, {
+                enqueue: (input) =>
+                  Effect.sync(() => {
+                    fcmCalls.push(input);
+                    return null;
+                  }),
+                process: () => Effect.void,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("sends agent notifications regardless of turn-event preferences", () => {
+    const preferences = (notificationsEnabled: boolean) =>
+      JSON.stringify({
+        liveActivitiesEnabled: true,
+        notificationsEnabled,
+        notifyOnApproval: false,
+        notifyOnInput: false,
+        notifyOnCompletion: false,
+        notifyOnFailure: false,
+      });
+    const ios = { ...target("ios"), preferences_json: preferences(true) };
+    const muted = { ...target("muted"), preferences_json: preferences(false) };
+    const android = {
+      ...target("android"),
+      platform: "android" as const,
+      ios_major_version: null,
+      preferences_json: preferences(true),
+    };
+    const fcmCalls: Array<Parameters<FcmDeliveries.FcmDeliveries["Service"]["enqueue"]>[0]> = [];
+    const appleCalls: Array<
+      Parameters<ApnsDeliveries.ApnsDeliveries["Service"]["sendAgentNotificationForTarget"]>[0]
+    > = [];
+    const notification = {
+      title: "Fix flaky tests",
+      body: "PR #412 is green",
+      environmentId: state.environmentId,
+      threadId: state.threadId,
+      deepLink: "/threads/env/thread",
+    };
+    return Effect.gen(function* () {
+      const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
+      yield* publisher.publishNotification({
+        environmentId: state.environmentId,
+        environmentPublicKey: "key",
+        threadId: state.threadId,
+        notification: {
+          title: notification.title,
+          message: notification.body,
+          deepLink: notification.deepLink,
+        },
+      });
+      expect(appleCalls).toEqual([{ target: ios, notification }]);
+      expect(fcmCalls).toEqual([{ target: android, state: null, notification }]);
+    }).pipe(
+      Effect.provide(
+        AgentActivityPublisher.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(AgentActivityRows.AgentActivityRows, makeAgentActivityRows()),
+              Layer.succeed(EnvironmentLinks.EnvironmentLinks, makeEnvironmentLinks()),
+              Layer.succeed(
+                LiveActivities.LiveActivities,
+                makeLiveActivities({ listTargets: () => Effect.succeed([ios, muted, android]) }),
+              ),
+              Layer.succeed(
+                ApnsDeliveries.ApnsDeliveries,
+                makeApnsDeliveries({
+                  sendAgentNotificationForTarget: (input) =>
+                    Effect.sync(() => {
+                      appleCalls.push(input);
                       return null;
                     }),
                 }),

@@ -491,6 +491,11 @@ export class ApnsDeliveries extends Context.Service<
       readonly target: LiveActivities.TargetRow;
       readonly aggregate: RelayAgentActivityAggregateState | null;
     }) => Effect.Effect<RelayDeliveryResult | null, ApnsDeliveryError>;
+    /** Queues a plain alert that carries no activity phase, so only `notificationsEnabled` gates it. */
+    readonly sendAgentNotificationForTarget: (input: {
+      readonly target: LiveActivities.TargetRow;
+      readonly notification: ApnsNotificationPayload;
+    }) => Effect.Effect<RelayDeliveryResult | null, ApnsDeliveryQueue.ApnsDeliveryQueueError>;
     readonly sendLiveActivity: (
       input: SendLiveActivityDeliveryInput,
     ) => Effect.Effect<RelayDeliveryResult, ApnsDeliveryError>;
@@ -1033,6 +1038,18 @@ const make = Effect.gen(function* () {
             notification,
           })
         : Effect.succeed(null);
+    }),
+    sendAgentNotificationForTarget: Effect.fnUntraced(function* (input) {
+      const token = input.target.push_token;
+      if (!config.apns || !token) return null;
+      return yield* deliveryQueue.enqueuePushNotification({
+        userId: input.target.user_id,
+        deviceId: input.target.device_id,
+        token,
+        bundleId: input.target.bundle_id,
+        apsEnvironment: input.target.aps_environment,
+        notification: sanitizeApnsNotificationPayload(input.notification),
+      });
     }),
     sendForTarget: Effect.fnUntraced(function* (input) {
       if (!config.apns) return null;

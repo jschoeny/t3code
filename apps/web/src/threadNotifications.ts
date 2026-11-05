@@ -12,6 +12,14 @@ export const NOTIFICATION_MODE_LABELS = {
   "notifications-and-sound": "Notifications with sound",
 } satisfies Record<NotificationMode, string>;
 
+export const NOTIFICATION_EVENT_OPTIONS = {
+  everything: { label: "Everything", description: "Every finished turn, plus everything below" },
+  custom: {
+    label: "Custom",
+    description: "Agent notifications you ask for, input and approval requests, and failures",
+  },
+} satisfies Record<ClientSettings["notificationEvents"], { label: string; description: string }>;
+
 export function hasNotificationSound(mode: NotificationMode) {
   return mode === "sound" || mode === "notifications-and-sound";
 }
