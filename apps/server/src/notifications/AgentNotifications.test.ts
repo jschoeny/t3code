@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import * as McpToolAccessTestkit from "../mcp/McpToolAccess.testkit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as AgentAwarenessRelay from "../relay/AgentAwarenessRelay.ts";
 import * as AgentNotifications from "./AgentNotifications.ts";
@@ -18,10 +19,8 @@ const layer = AgentNotifications.layer.pipe(
         publishNotification: () => Effect.succeed({ phone: "not_connected", phoneDevices: 0 }),
       }),
       Layer.mock(ThreadManagement.ThreadManagementService)({
-        getThreadShell: () =>
-          Effect.succeed({ title: "Fix flaky tests" } as Effect.Success<
-            ReturnType<ThreadManagement.ThreadManagementService["Service"]["getThreadShell"]>
-          >),
+        getThreadShell: (id) =>
+          Effect.succeed({ ...McpToolAccessTestkit.liveThreadShell(id), title: "Fix flaky tests" }),
       }),
     ),
   ),

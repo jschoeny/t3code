@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
+  type OrchestratorMcpNotifyResult,
   type Project,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -72,10 +73,7 @@ export class AgentAwarenessRelay extends Context.Service<
   }
 >()("t3/relay/AgentAwarenessRelay") {}
 
-export interface AgentNotificationPhoneResult {
-  readonly phone: "queued" | "no_devices" | "not_connected" | "failed";
-  readonly phoneDevices: number;
-}
+type AgentNotificationPhoneResult = Pick<OrchestratorMcpNotifyResult, "phone" | "phoneDevices">;
 
 function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;
