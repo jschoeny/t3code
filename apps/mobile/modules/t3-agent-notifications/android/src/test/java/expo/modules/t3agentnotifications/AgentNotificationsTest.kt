@@ -116,7 +116,7 @@ class AgentNotificationsTest : AgentNotificationsFixture() {
     AgentNotifications.receive(context, alert)
 
     assertEquals(card.id, manager.activeNotifications.single { it.tag == "t3-agent-activity" }.id)
-    assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+    assertTrue(manager.activeNotifications.any { it.tag == "t3-agent-alert" && it.id == "ping".hashCode() })
   }
 
   @Test
